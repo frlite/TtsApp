@@ -79,6 +79,10 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
     }
 
     private fun setupSliders() {
+        // 设置初始显示文本
+        binding.tvSpeedLabel.text = getString(R.string.label_speed, binding.sliderSpeed.value)
+        binding.tvPitchLabel.text = getString(R.string.label_pitch, binding.sliderPitch.value)
+
         binding.sliderSpeed.addOnChangeListener { _, value, _ ->
             binding.tvSpeedLabel.text = getString(R.string.label_speed, value)
         }
