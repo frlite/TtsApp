@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TTS 语音播报</string>
+    <string name="hint_input_text">请输入要转换的文字…</string>
+    <string name="label_speed">语速: %.1fx</string>
+    <string name="label_pitch">音调: %.1fx</string>
+    <string name="label_voice">语音</string>
+    <string name="btn_play">开始播放</string>
+    <string name="btn_stop">停止播放</string>
+    <string name="status_idle">就绪</string>
+    <string name="status_playing">正在播放…</string>
+    <string name="status_loading">语音引擎加载中…</string>
+    <string name="notification_channel_name">TTS 播放</string>
+    <string name="notification_title">TTS 语音播报</string>
+    <string name="notification_text">正在后台播放…</string>
+</resources>
