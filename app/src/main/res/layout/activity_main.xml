@@ -21,7 +21,9 @@
             android:layout_height="wrap_content"
             android:gravity="top"
             android:inputType="textMultiLine"
-            android:minLines="5" />
+            android:minLines="3"
+            android:maxLines="6"
+            android:scrollbars="vertical" />
 
     </com.google.android.material.textfield.TextInputLayout>
 
