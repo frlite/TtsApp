@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.ttsapp"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -36,6 +36,14 @@ android {
 
     buildFeatures {
         viewBinding = true
+    }
+
+    // 自定义 APK 输出文件名
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName = "语音播报-v${versionName}.apk"
+        }
     }
 }
 

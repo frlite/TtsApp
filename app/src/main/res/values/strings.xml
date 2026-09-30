@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TTS 语音播报</string>
+    <string name="app_name">语音播报</string>
     <string name="hint_input_text">请输入要转换的文字…</string>
     <string name="label_speed">语速: %.1fx</string>
     <string name="label_pitch">音调: %.1fx</string>
