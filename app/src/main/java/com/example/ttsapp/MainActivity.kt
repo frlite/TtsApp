@@ -125,6 +125,12 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerVoice.adapter = adapter
 
+        // 重建 adapter 会把选中项重置为 0，这里恢复用户此前的选择
+        val restoredPosition = voices.indexOfFirst { it.name == selectedVoice?.name }
+        if (restoredPosition >= 0) {
+            binding.spinnerVoice.setSelection(restoredPosition + 1, false)
+        }
+
         binding.spinnerVoice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 selectedVoice = if (position == 0) null else voices.getOrNull(position - 1)
@@ -139,10 +145,12 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
     private fun setupHistory() {
         historyAdapter = HistoryAdapter(
             onItemClick = { item ->
-                // 点击历史记录，填充到输入框并播放
+                // 点击历史记录：只回填内容与参数，不重复写入历史（避免产生副本）
                 binding.etTextInput.setText(item.text)
                 binding.etTextInput.setSelection(item.text.length)
-                playText(item.text, item.speechRate, item.pitch)
+                binding.sliderSpeed.value = item.speechRate
+                binding.sliderPitch.value = item.pitch
+                replayText(item.text, item.speechRate, item.pitch)
             },
             onDeleteClick = { item ->
                 lifecycleScope.launch {
@@ -156,9 +164,9 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
             adapter = historyAdapter
         }
 
-        // 监听历史记录数据变化
+        // 监听历史记录数据变化（仅加载最近 N 条）
         lifecycleScope.launch {
-            database.historyDao().getAllHistory().collectLatest { historyList ->
+            database.historyDao().getRecentHistory().collectLatest { historyList ->
                 historyAdapter.submitList(historyList)
                 binding.tvHistoryEmpty.visibility = if (historyList.isEmpty()) View.VISIBLE else View.GONE
             }
@@ -192,6 +200,7 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
         }
     }
 
+    /** 播放用户新输入的内容，同时写入历史记录。 */
     private fun playText(text: String, speed: Float, pitch: Float) {
         val service = ttsService
         if (service == null) {
@@ -200,9 +209,18 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
         }
         // 先将 Service 拉起到前台，确保播放不随 Activity 销毁而中断
         ensureServiceStarted()
-        // 保存到历史记录
         service.saveHistory(text, speed, pitch)
-        // 播放
+        service.speak(text, speed, pitch, selectedVoice)
+    }
+
+    /** 重播已有历史记录，不重复写入历史。 */
+    private fun replayText(text: String, speed: Float, pitch: Float) {
+        val service = ttsService
+        if (service == null) {
+            showTransientStatus(getString(R.string.status_service_unavailable))
+            return
+        }
+        ensureServiceStarted()
         service.speak(text, speed, pitch, selectedVoice)
     }
 

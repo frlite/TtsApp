@@ -63,6 +63,7 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
         const val CHANNEL_ID = "tts_playback_channel"
         const val NOTIFICATION_ID = 1
         const val UTTERANCE_ID = "tts_utterance"
+        private const val ACTION_STOP = "com.example.ttsapp.action.STOP"
 
         fun start(context: Context) {
             val intent = Intent(context, TtsService::class.java)
@@ -85,23 +86,35 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
     }
 
-    // 保存播放历史
+    /**
+     * 保存播放历史。相同文本会覆盖旧记录并刷新时间戳，
+     * 同时裁剪超出上限的旧记录，避免数据库无限增长。
+     */
     fun saveHistory(text: String, speechRate: Float, pitch: Float) {
         val db = database ?: return
         serviceScope.launch {
-            db.historyDao().insert(
+            val dao = db.historyDao()
+            dao.upsert(
                 HistoryEntity(
                     text = text,
                     speechRate = speechRate,
-                    pitch = pitch
+                    pitch = pitch,
+                    timestamp = System.currentTimeMillis()
                 )
             )
+            dao.trimToLimit()
         }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 通知栏"停止"按钮：用户已在后台，需要自行收尾并结束服务
+        if (intent?.action == ACTION_STOP) {
+            stopPlaying()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // 通过 startForegroundService 启动时，必须在 5 秒内调用 startForeground
         // 此处先以前台服务身份自保，实际播放由 UI 触发
         if (!isStartedAsForeground) {
@@ -258,10 +271,19 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun buildNotification(): Notification {
-        val pendingIntent = PendingIntent.getActivity(
+        val contentIntent = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // 循环播放时用户会退到后台，通知上必须能直接停止，
+        // 否则只能回到应用内才能结束播放。
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, TtsService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -269,7 +291,12 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_text))
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(contentIntent)
+            .addAction(
+                android.R.drawable.ic_media_pause,
+                getString(R.string.notification_stop),
+                stopIntent
+            )
             .setOngoing(true)
             .build()
     }

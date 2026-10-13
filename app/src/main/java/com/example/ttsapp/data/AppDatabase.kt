@@ -5,11 +5,17 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [HistoryEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [HistoryEntity::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
 
     companion object {
+        private const val DB_NAME = "tts_history_database"
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -18,8 +24,10 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "tts_history_database"
-                ).build()
+                    DB_NAME
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }
