@@ -13,4 +13,8 @@
     <string name="notification_channel_name">TTS 播放</string>
     <string name="notification_title">TTS 语音播报</string>
     <string name="notification_text">正在后台播放…</string>
+    <string name="cd_delete">删除</string>
+    <string name="history_title">历史记录</string>
+    <string name="history_empty">暂无播放记录</string>
+    <string name="history_clear">清空历史</string>
 </resources>

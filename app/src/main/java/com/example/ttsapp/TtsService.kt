@@ -13,6 +13,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import androidx.core.app.NotificationCompat
+import com.example.ttsapp.data.AppDatabase
+import com.example.ttsapp.data.HistoryEntity
 import java.util.Locale
 
 class TtsService : Service(), TextToSpeech.OnInitListener {
@@ -41,6 +43,8 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
 
     var callback: TtsCallback? = null
 
+    private var database: AppDatabase? = null
+
     companion object {
         const val CHANNEL_ID = "tts_playback_channel"
         const val NOTIFICATION_ID = 1
@@ -50,7 +54,23 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        database = AppDatabase.getDatabase(this)
         tts = TextToSpeech(this, this)
+    }
+
+    // 保存播放历史
+    fun saveHistory(text: String, speechRate: Float, pitch: Float) {
+        database?.let { db ->
+            kotlinx.coroutines.GlobalScope.launch {
+                db.historyDao().insert(
+                    HistoryEntity(
+                        text = text,
+                        speechRate = speechRate,
+                        pitch = pitch
+                    )
+                )
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder

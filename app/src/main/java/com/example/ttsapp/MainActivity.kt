@@ -16,8 +16,14 @@ import android.widget.ArrayAdapter
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.example.ttsapp.adapter.HistoryAdapter
+import com.example.ttsapp.data.AppDatabase
+import com.example.ttsapp.data.HistoryEntity
 import com.example.ttsapp.databinding.ActivityMainBinding
-import java.util.Locale
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
 
@@ -27,6 +33,9 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
     private var voices: List<Voice> = emptyList()
     private var selectedVoice: Voice? = null
 
+    private lateinit var database: AppDatabase
+    private lateinit var historyAdapter: HistoryAdapter
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as TtsService.LocalBinder
@@ -34,7 +43,6 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
             ttsService?.callback = this@MainActivity
             isBound = true
 
-            // 如果 TTS 已经初始化完成，通知 UI
             if (ttsService?.isPlaying() == true) {
                 updatePlayState(true)
             }
@@ -57,9 +65,12 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        database = AppDatabase.getDatabase(this)
+
         requestNotificationPermission()
         setupSliders()
         setupButtons()
+        setupHistory()
         bindTtsService()
     }
 
@@ -79,7 +90,6 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
     }
 
     private fun setupSliders() {
-        // 设置初始显示文本
         binding.tvSpeedLabel.text = getString(R.string.label_speed, binding.sliderSpeed.value)
         binding.tvPitchLabel.text = getString(R.string.label_pitch, binding.sliderPitch.value)
 
@@ -114,6 +124,42 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
         }
     }
 
+    private fun setupHistory() {
+        historyAdapter = HistoryAdapter(
+            onItemClick = { item ->
+                // 点击历史记录，填充到输入框并播放
+                binding.etTextInput.setText(item.text)
+                binding.etTextInput.setSelection(item.text.length)
+                playText(item.text, item.speechRate, item.pitch)
+            },
+            onDeleteClick = { item ->
+                lifecycleScope.launch {
+                    database.historyDao().deleteById(item.id)
+                }
+            }
+        )
+
+        binding.rvHistory.apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            adapter = historyAdapter
+        }
+
+        // 监听历史记录数据变化
+        lifecycleScope.launch {
+            database.historyDao().getAllHistory().collectLatest { historyList ->
+                historyAdapter.submitList(historyList)
+                binding.tvHistoryEmpty.visibility = if (historyList.isEmpty()) View.VISIBLE else View.GONE
+            }
+        }
+
+        // 清空历史按钮
+        binding.btnClearHistory.setOnClickListener {
+            lifecycleScope.launch {
+                database.historyDao().clearAll()
+            }
+        }
+    }
+
     private fun setupButtons() {
         binding.btnPlayPause.setOnClickListener {
             if (ttsService?.isPlaying() == true) {
@@ -124,11 +170,16 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
                     binding.etTextInput.error = getString(R.string.hint_input_text)
                     return@setOnClickListener
                 }
-                val speed = binding.sliderSpeed.value
-                val pitch = binding.sliderPitch.value
-                ttsService?.speak(text, speed, pitch, selectedVoice)
+                playText(text, binding.sliderSpeed.value, binding.sliderPitch.value)
             }
         }
+    }
+
+    private fun playText(text: String, speed: Float, pitch: Float) {
+        // 保存到历史记录
+        ttsService?.saveHistory(text, speed, pitch)
+        // 播放
+        ttsService?.speak(text, speed, pitch, selectedVoice)
     }
 
     private fun updatePlayState(isPlaying: Boolean) {
