@@ -5,7 +5,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -17,6 +19,8 @@ import com.example.ttsapp.data.AppDatabase
 import com.example.ttsapp.data.HistoryEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -30,6 +34,9 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     private var pendingPitch: Float = 1.0f
     private var pendingVoice: Voice? = null
 
+    // Service 独立于 Activity 存活所需的标记
+    private var isStartedAsForeground = false
+
     private val binder = LocalBinder()
 
     inner class LocalBinder : Binder() {
@@ -42,16 +49,33 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
         fun onInitFailed()
         fun onPlayingStateChanged(isPlaying: Boolean)
         fun onVoicesAvailable(voices: List<Voice>)
+        fun onSpeakFailed(reason: String)
     }
 
     var callback: TtsCallback? = null
 
     private var database: AppDatabase? = null
 
+    // 与 Service 生命周期绑定，onDestroy 时统一取消
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     companion object {
         const val CHANNEL_ID = "tts_playback_channel"
         const val NOTIFICATION_ID = 1
         const val UTTERANCE_ID = "tts_utterance"
+
+        fun start(context: Context) {
+            val intent = Intent(context, TtsService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, TtsService::class.java))
+        }
     }
 
     override fun onCreate() {
@@ -63,20 +87,28 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
 
     // 保存播放历史
     fun saveHistory(text: String, speechRate: Float, pitch: Float) {
-        database?.let { db ->
-            CoroutineScope(Dispatchers.IO).launch {
-                db.historyDao().insert(
-                    HistoryEntity(
-                        text = text,
-                        speechRate = speechRate,
-                        pitch = pitch
-                    )
+        val db = database ?: return
+        serviceScope.launch {
+            db.historyDao().insert(
+                HistoryEntity(
+                    text = text,
+                    speechRate = speechRate,
+                    pitch = pitch
                 )
-            }
+            )
         }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 通过 startForegroundService 启动时，必须在 5 秒内调用 startForeground
+        // 此处先以前台服务身份自保，实际播放由 UI 触发
+        if (!isStartedAsForeground) {
+            ensureForeground()
+        }
+        return START_NOT_STICKY
+    }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
@@ -116,30 +148,48 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     }
 
     fun speak(text: String, speechRate: Float = 1.0f, pitch: Float = 1.0f, voice: Voice? = null) {
+        if (!isTtsReady) {
+            callback?.onSpeakFailed("语音引擎尚未就绪")
+            return
+        }
+        if (text.isBlank()) {
+            callback?.onSpeakFailed("播放内容为空")
+            return
+        }
+
         pendingText = text
         pendingSpeechRate = speechRate
         pendingPitch = pitch
         pendingVoice = voice
 
-        if (isTtsReady) {
-            isPlaying = true
-            startForeground(NOTIFICATION_ID, buildNotification())
-            speakInternal()
+        // 确保服务进入前台状态，使播放不依赖 Activity 生命周期
+        ensureForeground()
+
+        isPlaying = true
+        val started = speakInternal()
+        if (started) {
             callback?.onPlayingStateChanged(true)
+        } else {
+            isPlaying = false
+            releaseForeground()
+            callback?.onSpeakFailed("当前语音引擎无法播放该内容")
         }
     }
 
-    private fun speakInternal() {
-        if (!isTtsReady || pendingText.isBlank()) return
+    /**
+     * 实际发起播报。返回 false 表示引擎拒绝了本次请求。
+     */
+    private fun speakInternal(): Boolean {
+        val engine = tts ?: return false
+        if (!isTtsReady || pendingText.isBlank()) return false
 
-        tts?.apply {
-            setSpeechRate(pendingSpeechRate)
-            setPitch(pendingPitch)
-            pendingVoice?.let { setVoice(it) }
+        engine.setSpeechRate(pendingSpeechRate)
+        engine.setPitch(pendingPitch)
+        pendingVoice?.let { engine.setVoice(it) }
 
-            // 使用 QUEUE_FLUSH 确保每次从头开始播放
-            speak(pendingText, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
-        }
+        // 使用 QUEUE_FLUSH 确保每次从头开始播放
+        val result = engine.speak(pendingText, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+        return result == TextToSpeech.SUCCESS
     }
 
     fun stopSpeaking() {
@@ -147,17 +197,50 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun stopPlaying() {
+        val wasPlaying = isPlaying
         isPlaying = false
         tts?.stop()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-        callback?.onPlayingStateChanged(false)
+        releaseForeground()
+        // 只有通过 startForegroundService 启动时才 stopSelf，
+        // 纯 bind 场景下 stopSelf 不会销毁服务，保留绑定关系
+        if (isStartedAsForeground) {
+            stopSelf()
+        }
+        if (wasPlaying) {
+            callback?.onPlayingStateChanged(false)
+        }
     }
 
     fun isPlaying(): Boolean = isPlaying
 
     fun getVoices(): List<Voice> {
         return if (isTtsReady) tts?.voices?.toList() ?: emptyList() else emptyList()
+    }
+
+    /**
+     * 进入前台服务状态。使用 startForeground 让服务在 Activity 销毁后仍可存活。
+     */
+    private fun ensureForeground() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        isStartedAsForeground = true
+    }
+
+    /**
+     * 退出前台状态但保留服务实例，等待下一次播放重新进入前台。
+     */
+    private fun releaseForeground() {
+        if (!isStartedAsForeground) return
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        isStartedAsForeground = false
     }
 
     private fun createNotificationChannel() {
@@ -192,6 +275,8 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        isPlaying = false
+        serviceScope.cancel()
         tts?.stop()
         tts?.shutdown()
         tts = null

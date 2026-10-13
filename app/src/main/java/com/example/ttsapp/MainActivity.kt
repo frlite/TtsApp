@@ -27,6 +27,10 @@ import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
 
+    companion object {
+        private const val STATUS_RESET_DELAY_MS = 2500L
+    }
+
     private lateinit var binding: ActivityMainBinding
     private var ttsService: TtsService? = null
     private var isBound = false
@@ -87,6 +91,14 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
     private fun bindTtsService() {
         val intent = Intent(this, TtsService::class.java)
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+    }
+
+    /**
+     * 播放前先把 Service 拉起到前台状态，使其不依赖本 Activity 的生命周期。
+     * 旋转屏幕或从最近任务移除应用时，播放仍能继续。
+     */
+    private fun ensureServiceStarted() {
+        runCatching { TtsService.start(this) }
     }
 
     private fun setupSliders() {
@@ -162,8 +174,13 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
 
     private fun setupButtons() {
         binding.btnPlayPause.setOnClickListener {
-            if (ttsService?.isPlaying() == true) {
-                ttsService?.stopSpeaking()
+            val service = ttsService
+            if (service == null) {
+                showTransientStatus(getString(R.string.status_service_unavailable))
+                return@setOnClickListener
+            }
+            if (service.isPlaying()) {
+                service.stopSpeaking()
             } else {
                 val text = binding.etTextInput.text.toString().trim()
                 if (text.isEmpty()) {
@@ -176,10 +193,26 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
     }
 
     private fun playText(text: String, speed: Float, pitch: Float) {
+        val service = ttsService
+        if (service == null) {
+            showTransientStatus(getString(R.string.status_service_unavailable))
+            return
+        }
+        // 先将 Service 拉起到前台，确保播放不随 Activity 销毁而中断
+        ensureServiceStarted()
         // 保存到历史记录
-        ttsService?.saveHistory(text, speed, pitch)
+        service.saveHistory(text, speed, pitch)
         // 播放
-        ttsService?.speak(text, speed, pitch, selectedVoice)
+        service.speak(text, speed, pitch, selectedVoice)
+    }
+
+    private fun showTransientStatus(message: String) {
+        binding.tvStatus.text = message
+        binding.tvStatus.postDelayed({
+            if (!ttsService?.isPlaying()!!) {
+                binding.tvStatus.text = getString(R.string.status_idle)
+            }
+        }, STATUS_RESET_DELAY_MS)
     }
 
     private fun updatePlayState(isPlaying: Boolean) {
@@ -202,7 +235,8 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
 
     override fun onInitFailed() {
         runOnUiThread {
-            binding.tvStatus.text = "TTS 引擎初始化失败"
+            updatePlayState(false)
+            showTransientStatus(getString(R.string.status_tts_init_failed))
         }
     }
 
@@ -219,12 +253,21 @@ class MainActivity : AppCompatActivity(), TtsService.TtsCallback {
         }
     }
 
+    override fun onSpeakFailed(reason: String) {
+        runOnUiThread {
+            // 播放失败时回到空闲状态，避免按钮卡在"停止播放"
+            updatePlayState(false)
+            showTransientStatus(reason)
+        }
+    }
+
     override fun onDestroy() {
-        super.onDestroy()
         if (isBound) {
+            // 只解除绑定，不停止播放：Service 已通过 startForegroundService 独立存活
             ttsService?.callback = null
-            unbindService(serviceConnection)
+            runCatching { unbindService(serviceConnection) }
             isBound = false
         }
+        super.onDestroy()
     }
 }
