@@ -15,6 +15,9 @@ import android.speech.tts.Voice
 import androidx.core.app.NotificationCompat
 import com.example.ttsapp.data.AppDatabase
 import com.example.ttsapp.data.HistoryEntity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 class TtsService : Service(), TextToSpeech.OnInitListener {
@@ -61,7 +64,7 @@ class TtsService : Service(), TextToSpeech.OnInitListener {
     // 保存播放历史
     fun saveHistory(text: String, speechRate: Float, pitch: Float) {
         database?.let { db ->
-            kotlinx.coroutines.GlobalScope.launch {
+            CoroutineScope(Dispatchers.IO).launch {
                 db.historyDao().insert(
                     HistoryEntity(
                         text = text,
